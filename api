@@ -1,237 +1,29 @@
 import streamlit as st
-import os
-import shutil
 import re
-import base64
 from pathlib import Path
-import pyrebase
+import base64
 from groq import Groq
+import time
+from datetime import datetime, timedelta
 
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
+# ==========================================
+# CONFIGURACIÓN
+# ==========================================
+st.set_page_config(
+    page_title="ENLACES - Asistente Virtual",
+    page_icon="🎓",
+    layout="wide"
+)
 
-from sentence_transformers import CrossEncoder
-import numpy as np
-
-# ============================================
-# CONFIGURACIÓN DE FIREBASE
-# ============================================
-FIREBASE_CONFIG = {
-    "apiKey": "AIzaSyAkx-rjtOODGq90ylMRCjTS_2nqnelrEbQ",
-    "authDomain": "cook-a7ba8.firebaseapp.com",
-    "databaseURL": "https://cook-a7ba8-default-rtdb.firebaseio.com",
-    "projectId": "cook-a7ba8",
-    "storageBucket": "cook-a7ba8.firebasestorage.app",
-    "messagingSenderId": "573777071011",
-    "appId": "1:573777071011:web:a505d0373a25ae3f13a816"
-}
-
-firebase = pyrebase.initialize_app(FIREBASE_CONFIG)
-auth = firebase.auth()
-
-# ============================================
-# CONFIGURACIÓN DEL RAG
-# ============================================
-BASE_DIR = Path("./documentos")
-INDEX_BASE = Path("./faiss_index")
-EMBEDDING_MODEL = "intfloat/multilingual-e5-large"      # para mejor español
-CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-12-v2"
-
-# API de Groq (código 1)
-GROQ_API_KEY = "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"
+GROQ_API_KEY = "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"  # Tu API key
 cliente = Groq(api_key=GROQ_API_KEY)
-MODELO_GROQ = "llama-3.1-8b-instant"
+MODELO = "llama-3.1-8b-instant"
 
-st.set_page_config(page_title="ENLACES - Asistente Virtual", page_icon="🎓", layout="wide")
-
-# ============================================
-# FUNCIONES DE AUTENTICACIÓN
-# ============================================
-def validar_email(email):
-    patron = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    return re.match(patron, email) is not None
-
-def mostrar_login():
-    st.markdown("""
-    <style>
-        .main .block-container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 2rem;
-        }
-        .login-card {
-            background: white;
-            border-radius: 20px;
-            padding: 2rem;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            max-width: 400px;
-            width: 100%;
-        }
-        .stTextInput > div > div > input {
-            border-radius: 30px !important;
-        }
-        .stButton > button {
-            border-radius: 30px !important;
-            background-color: #6b4f3c !important;
-            color: white !important;
-        }
-        .stButton > button:hover {
-            background-color: #4e3a2b !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-    with st.container():
-        st.markdown('<div class="login-card">', unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align:center;'>📚 Asistente ENLACES</h1>", unsafe_allow_html=True)
-        st.markdown("<h3 style='text-align:center; color:#6b4f3c;'>🔐 Acceso al sistema</h3>", unsafe_allow_html=True)
-
-        modo = st.radio("Selecciona acción:", ["Iniciar sesión", "Registrarse"], horizontal=True)
-
-        with st.form("login_form"):
-            email = st.text_input("📧 Correo electrónico", placeholder="usuario@ejemplo.com")
-            password = st.text_input("🔑 Contraseña", type="password", placeholder="mínimo 6 caracteres")
-            submit = st.form_submit_button("🚪 Continuar", use_container_width=True)
-
-            if submit:
-                if not email or not password:
-                    st.error("❌ Completa ambos campos.")
-                elif not validar_email(email):
-                    st.error("❌ Formato de correo inválido.")
-                else:
-                    try:
-                        if modo == "Iniciar sesión":
-                            auth.sign_in_with_email_and_password(email, password)
-                            st.session_state.autenticado = True
-                            st.session_state.user_email = email
-                            st.rerun()
-                        else:
-                            auth.create_user_with_email_and_password(email, password)
-                            st.success("✅ Registro exitoso. Ahora inicia sesión.")
-                    except Exception as e:
-                        error = str(e)
-                        if "EMAIL_NOT_FOUND" in error:
-                            st.error("❌ Correo no registrado.")
-                        elif "INVALID_PASSWORD" in error:
-                            st.error("❌ Contraseña incorrecta.")
-                        elif "EMAIL_EXISTS" in error:
-                            st.error("❌ El correo ya está registrado.")
-                        elif "WEAK_PASSWORD" in error:
-                            st.error("❌ Contraseña débil (mínimo 6 caracteres).")
-                        else:
-                            st.error(f"❌ Error: {error}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# ============================================
-# FUNCIONES DE MODELOS (CACHÉ)
-# ============================================
-@st.cache_resource
-def cargar_embeddings():
-    return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
-
-@st.cache_resource
-def cargar_cross_encoder():
-    return CrossEncoder(CROSS_ENCODER_MODEL)
-
-@st.cache_resource
-def cargar_index(index_path):
-    if os.path.exists(index_path):
-        embeddings = cargar_embeddings()
-        try:
-            return FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
-        except Exception as e:
-            st.error(f"Error al cargar índice: {e}")
-    return None
-
-# ============================================
-# PROCESAMIENTO DE DOCUMENTOS (igual que en código 2)
-# ============================================
-def extraer_bloques_problema_solucion(texto):
-    lineas = texto.split('\n')
-    bloques = []
-    bloque_actual = {"problema": "", "solucion": "", "texto_completo": ""}
-    capturando = None
-    for linea in lineas:
-        linea_strip = linea.strip()
-        if linea_strip.startswith("Problema:"):
-            if capturando == "solucion":
-                if bloque_actual["problema"] and bloque_actual["solucion"]:
-                    bloques.append(bloque_actual.copy())
-                bloque_actual = {"problema": "", "solucion": "", "texto_completo": ""}
-            capturando = "problema"
-            bloque_actual["problema"] = linea_strip
-            bloque_actual["texto_completo"] += linea + "\n"
-        elif linea_strip.startswith("Solución:"):
-            capturando = "solucion"
-            bloque_actual["solucion"] = linea_strip
-            bloque_actual["texto_completo"] += linea + "\n"
-        else:
-            if capturando == "problema":
-                bloque_actual["problema"] += " " + linea_strip
-                bloque_actual["texto_completo"] += linea + "\n"
-            elif capturando == "solucion":
-                bloque_actual["solucion"] += " " + linea_strip
-                bloque_actual["texto_completo"] += linea + "\n"
-    if bloque_actual["problema"] and bloque_actual["solucion"]:
-        bloques.append(bloque_actual)
-    return bloques
-
-def cargar_documentos_seleccionados(archivos):
-    docs_originales = []
-    for archivo in archivos:
-        ruta = BASE_DIR / archivo
-        if ruta.exists():
-            try:
-                loader = TextLoader(str(ruta), encoding="utf-8")
-                docs = loader.load()
-                for doc in docs:
-                    bloques = extraer_bloques_problema_solucion(doc.page_content)
-                    for bloque in bloques:
-                        doc_bloque = Document(
-                            page_content=bloque["texto_completo"],
-                            metadata={
-                                "source": archivo,
-                                "problema": bloque["problema"],
-                                "solucion": bloque["solucion"]
-                            }
-                        )
-                        docs_originales.append(doc_bloque)
-            except Exception as e:
-                st.error(f"Error al cargar {archivo}: {e}")
-        else:
-            st.error(f"Archivo no encontrado: {archivo}")
-    return docs_originales
-
-def construir_index(archivos, index_path):
-    if not archivos:
-        st.error("No se seleccionó ningún archivo.")
-        return False
-
-    with st.spinner("Cargando y procesando documentos..."):
-        documentos = cargar_documentos_seleccionados(archivos)
-    if not documentos:
-        st.error("No se pudieron cargar bloques válidos.")
-        return False
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
-    chunks = splitter.split_documents(documentos)
-
-    with st.spinner(f"Generando embeddings para {len(chunks)} fragmentos..."):
-        embeddings = cargar_embeddings()
-        vector_store = FAISS.from_documents(chunks, embeddings)
-        vector_store.save_local(index_path)
-    st.success(f"Índice guardado en {index_path} con {len(chunks)} fragmentos.")
-    return True
-
-# ============================================
-# FUNCIÓN PARA DETECTAR PREGUNTAS SOBRE EL CREADOR (del código 1)
-# ============================================
+# ==========================================
+# FUNCIÓN PARA DETECTAR PREGUNTAS SOBRE EL CREADOR
+# ==========================================
 def es_pregunta_sobre_creador(pregunta: str) -> bool:
+    """Detecta si el usuario pregunta quién creó el asistente"""
     pregunta_lower = pregunta.lower()
     palabras_creador = [
         'quién te creó', 'quien te creo', 'quién te hizo', 'quien te hizo',
@@ -247,6 +39,7 @@ def es_pregunta_sobre_creador(pregunta: str) -> bool:
     return False
 
 def respuesta_sobre_creador() -> str:
+    """Respuesta cuando preguntan sobre el creador"""
     return """😊 **¡Qué bonito que quieras conocerme!**
 
 Yo fui creado por **Anthony Gabriel Hernández Cartagena**, un estudiante talentoso del **Complejo Educativo Jutta Steiner de Toruño**.
@@ -263,25 +56,172 @@ Así que aquí estoy, gracias a su esfuerzo y dedicación. ¡Espero estar a la a
 
 ¿Necesitas ayuda con algo de ENLACES? ¡Cuéntame!"""
 
-# ============================================
-# FUNCIÓN PARA RECUPERAR CONTEXTO Y GENERAR RESPUESTA CON GROQ
-# ============================================
-def buscar_contexto(pregunta, vector_store, cross_encoder, k=10, top_n=3):
-    """Retorna los fragmentos más relevantes (top_n) y su contexto combinado"""
-    docs = vector_store.similarity_search(pregunta, k=k)
-    if not docs:
-        return None, None
-    pairs = [(pregunta, doc.page_content) for doc in docs]
-    scores = cross_encoder.predict(pairs)
-    sorted_indices = np.argsort(scores)[::-1]
-    top_docs = [docs[i] for i in sorted_indices[:top_n]]
-    contexto = "\n\n".join([doc.page_content for doc in top_docs])
-    fuentes = list({doc.metadata.get("source", "desconocido") for doc in top_docs})
-    return contexto, fuentes
+# ==========================================
+# FUNCIÓN RESPONDER SOLO CON TXT (RESPALDO)
+# ==========================================
+def responder_solo_txt(pregunta: str, documentos: list) -> str:
+    """Responde usando SOLO los TXT - modo de respaldo"""
+    
+    # Primero verificar si pregunta por el creador
+    if es_pregunta_sobre_creador(pregunta):
+        return respuesta_sobre_creador()
+    
+    if not documentos:
+        return "⚠️ No hay documentos en la carpeta 'documentos_enlaces'"
+    
+    pregunta_lower = pregunta.lower()
+    
+    # Saludos
+    if any(p in pregunta_lower for p in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos']):
+        return "¡Hola! 😊 Soy el asistente de ENLACES. ¿En qué puedo ayudarte hoy? Puedo ayudarte con contraseñas, problemas de laptop, recuperación de NIE, sedes de atención y más. ¡Cuéntame!"
+    
+    if any(p in pregunta_lower for p in ['cómo estás', 'como estas', 'que tal', 'qué tal']):
+        return "¡Estoy muy bien! 😊 Gracias por preguntar. Listo para ayudarte con lo que necesites. ¿Tienes alguna consulta sobre tu cuenta, tu laptop o las sedes de ENLACES?"
+    
+    if any(p in pregunta_lower for p in ['gracias', 'thank you', 'te agradezco']):
+        return "¡De nada! 😊 Para eso estoy aquí. ¿Necesitas ayuda con algo más? Estoy para servirte."
+    
+    if any(p in pregunta_lower for p in ['adiós', 'chao', 'hasta luego', 'nos vemos', 'bye']):
+        return "¡Hasta luego! 😊 Que tengas un excelente día. Si necesitas algo más, aquí estoy. ¡Cuídate!"
+    
+    # SEDES
+    if 'sede' in pregunta_lower:
+        if 'san salvador' in pregunta_lower or 'providencia' in pregunta_lower:
+            return "📍 **Sede San Salvador**\n\nFinal 25 Av. Norte, Reparto La Providencia, San Salvador.\n\n📞 Teléfono: 2990-6000\n🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"
+        elif 'santa ana' in pregunta_lower:
+            return "📍 **Sede Santa Ana**\n\n8a Avenida Sur, entre 15a y 17a Calle Poniente, Santa Ana.\n\n📞 Teléfono: 2990-6000\n🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"
+        elif 'san miguel' in pregunta_lower:
+            return "📍 **Sede San Miguel**\n\n12a Avenida Norte, No. 605, Barrio La Cruz, San Miguel.\n\n📞 Teléfono: 2990-6000\n🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"
+        else:
+            return """📍 **Todas las Sedes ENLACES**
 
-def responder_con_groq(pregunta: str, contexto: str, historial: list) -> str:
-    """Genera respuesta usando Groq API con el contexto recuperado"""
-    # Construir historial reciente
+• **San Salvador:** Final 25 Av. Norte, Reparto La Providencia
+• **Santa Ana:** 8a Avenida Sur, entre 15a y 17a Calle Poniente
+• **San Miguel:** 12a Avenida Norte, No. 605, Barrio La Cruz
+
+📞 Teléfono: 2990-6000"""
+    
+    # LAPTOP
+    if any(p in pregunta_lower for p in ['laptop', 'enciende', 'prende', 'pantalla', 'encendido', 'no prende', 'computadora']):
+        return """💻 **Problemas con tu laptop**
+
+1. Verifica que el cargador esté bien conectado a la corriente y a la laptop
+2. Busca una luz pequeña en el cargador que indique que está recibiendo energía
+3. Déjala conectada unos 10 minutos
+4. Presiona el botón de encendido por 30 segundos sin soltar
+
+Si el problema persiste, llama al 2990-6000 para agendar una revisión en la sede más cercana.
+
+📞 **Mesa de Ayuda:** 2990-6000 | WhatsApp: 7070-9889"""
+    
+    # CONTRASEÑA
+    if any(p in pregunta_lower for p in ['contraseña', 'password', 'olvidé', 'recuperar', 'restablecer']):
+        if 'docente' in pregunta_lower:
+            return """🔐 **Recuperación de contraseña para DOCENTES**
+
+Ingresa a: http://docentes.clases.edu.sv/restablecer
+
+📞 Mesa de Ayuda: 2990-6000
+✉️ formacion.docente@mined.gob.sv"""
+        else:
+            return """🔐 **Recuperación de contraseña para ESTUDIANTES**
+
+Ingresa a: http://restablecer.clases.edu.sv
+
+⚠️ Solo funciona si tienes matrícula activa.
+
+📞 ¿Problemas? Llama al 2990-6000"""
+    
+    # NIE
+    if 'nie' in pregunta_lower:
+        return """📄 **Consulta tu NIE**
+
+Ingresa a: http://consulta.mined.gob.sv/nie
+
+Necesitas tu nombre completo y fecha de nacimiento.
+
+📞 Si no aparece, llama al 2990-6000"""
+    
+    # SOPORTE
+    if any(p in pregunta_lower for p in ['soporte', 'numero', 'teléfono', 'telefono', 'whatsapp', 'contacto', 'ayuda', '2990', '7070']):
+        return """📞 **Mesa de Ayuda ENLACES**
+
+• Teléfono fijo: 2990-6000
+• WhatsApp: 7070-9889
+• Correo: soporte.enlaces@mined.gob.sv
+
+🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"""
+    
+    # DOCENTE BLOQUEADA
+    if 'docente' in pregunta_lower and ('bloqueada' in pregunta_lower or 'cuenta' in pregunta_lower):
+        return """👨‍🏫 **Cuenta de docente bloqueada**
+
+Contacta a la Mesa de Ayuda al 2990-6000 o escribe a formacion.docente@mined.gob.sv
+
+Ellos verificarán tu identidad y reactivarán tu cuenta."""
+    
+    # BATERÍA
+    if any(p in pregunta_lower for p in ['batería', 'bateria', 'carga', 'cargador']):
+        return """🔋 **Problemas con la batería**
+
+1. Prueba con otro enchufe
+2. Verifica que el cargador esté en buen estado
+3. Si la batería está hinchada, no la uses y llévala a la sede
+
+📞 Mesa de Ayuda: 2990-6000"""
+    
+    # Búsqueda en documentos
+    mejor_match = None
+    mejor_puntuacion = 0
+    
+    for doc in documentos:
+        problema = doc['problema'].lower()
+        puntuacion = 0
+        for palabra in pregunta_lower.split():
+            if len(palabra) > 2 and palabra in problema:
+                puntuacion += 10
+        
+        if puntuacion > mejor_puntuacion:
+            mejor_puntuacion = puntuacion
+            mejor_match = doc
+    
+    if mejor_match and mejor_puntuacion >= 10:
+        respuesta = mejor_match['solucion']
+        respuesta = re.sub(r'\s+', ' ', respuesta)
+        return f"{respuesta}\n\n📞 Mesa de Ayuda: 2990-6000 | WhatsApp: 7070-9889"
+    
+    # NO ENCONTRÓ NADA
+    return """❌ No encontré información específica en mis documentos.
+
+📚 **Puedo ayudarte con:**
+• Contraseñas de @clases.edu.sv
+• Problemas con laptops (encendido, batería, cargador)
+• Recuperación de NIE
+• Cuentas de docentes
+• Sedes de atención (direcciones, horarios)
+• Números de contacto
+
+📞 **Mesa de Ayuda:** 2990-6000 | WhatsApp: 7070-9889"""
+
+# ==========================================
+# FUNCIÓN RESPONDER CON API (FLUIDA Y COMPLETA)
+# ==========================================
+def responder_con_api(pregunta: str, historial: list, documentos: list) -> str:
+    """Responde usando API - conversación fluida con todo lo de TXT"""
+    
+    # PRIMERO: Verificar si pregunta por el creador
+    if es_pregunta_sobre_creador(pregunta):
+        return respuesta_sobre_creador()
+    
+    if not documentos:
+        return responder_solo_txt(pregunta, documentos)
+    
+    # Construir contexto con documentos
+    contexto_docs = ""
+    for doc in documentos[:25]:
+        contexto_docs += f"Problema: {doc['problema']}\nSolución: {doc['solucion']}\n\n"
+    
+    # Construir historial
     historial_texto = ""
     if historial and len(historial) > 0:
         historial_texto = "\n--- CONVERSACIÓN ANTERIOR ---\n"
@@ -291,7 +231,7 @@ def responder_con_groq(pregunta: str, contexto: str, historial: list) -> str:
             else:
                 historial_texto += f"Asistente: {msg['content']}\n"
         historial_texto += "---\n"
-
+    
     prompt = f"""Eres un asistente virtual amable, empático y conversacional del programa ENLACES del Ministerio de Educación de El Salvador.
 
 📌 **TEMAS QUE CUBRES (según tus documentos):**
@@ -311,7 +251,7 @@ def responder_con_groq(pregunta: str, contexto: str, historial: list) -> str:
 5. No te limites solo a @clases.edu.sv - los laptops, sedes, NIE también son parte de ti
 
 CONTEXTO OFICIAL (información real de ENLACES):
-{contexto}
+{contexto_docs}
 
 {historial_texto}
 
@@ -321,23 +261,126 @@ Responde de forma natural, amable y usando el contexto oficial para información
     
     try:
         response = cliente.chat.completions.create(
-            model=MODELO_GROQ,
+            model=MODELO,
             messages=[
                 {"role": "system", "content": "Eres un asistente amable de ENLACES. Ayudas con cuentas @clases.edu.sv, laptops, sedes, NIE y soporte técnico. Hablas de forma natural y empática."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,
+            temperature=0.8,
             max_tokens=500
         )
+        
         return response.choices[0].message.content
+        
     except Exception as e:
         if "429" in str(e):
-            return "⚠️ Demasiadas solicitudes. Por favor, espera unos segundos y vuelve a intentar."
-        return f"❌ Error al conectar con el servicio: {e}"
+            return responder_solo_txt(pregunta, documentos)
+        return responder_solo_txt(pregunta, documentos)
 
-# ============================================
-# INTERFAZ PRINCIPAL (estilo del código 1)
-# ============================================
+# ==========================================
+# FUNCIÓN PRINCIPAL
+# ==========================================
+def responder(pregunta: str, historial: list, documentos: list) -> str:
+    """Elige entre API y TXT"""
+    
+    try:
+        return responder_con_api(pregunta, historial, documentos)
+    except Exception as e:
+        return responder_solo_txt(pregunta, documentos)
+
+# ==========================================
+# ESTILOS CSS
+# ==========================================
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+    * { font-family: 'Poppins', sans-serif; }
+            
+    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #e8edf5 100%); }
+    
+    .main-header {
+        background: linear-gradient(135deg, #003366 0%, #1a4d8c 100%);
+        padding: 1rem 2rem;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        margin-bottom: 1.5rem;
+    }
+    
+    .main-header h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+    .main-header p { margin: 3px 0 0; font-size: 0.7rem; opacity: 0.9; }
+    
+    .chat-message-user {
+        background: linear-gradient(135deg, #003366, #1a4d8c);
+        color: white;
+        padding: 10px 16px;
+        border-radius: 18px 18px 5px 18px;
+        margin: 8px 0;
+        text-align: right;
+        max-width: 75%;
+        margin-left: auto;
+    }
+    
+    .chat-message-bot {
+        background: #f0f4f9;
+        color: #2c3e50;
+        padding: 10px 16px;
+        border-radius: 18px 18px 18px 5px;
+        margin: 8px 0;
+        text-align: left;
+        max-width: 85%;
+        margin-right: auto;
+        border-left: 3px solid #4da8ff;
+    }
+    
+    .footer {
+        background: white;
+        padding: 0.8rem;
+        border-radius: 12px;
+        margin-top: 1.5rem;
+        text-align: center;
+        color: #6c757d;
+        font-size: 0.7rem;
+    }
+    
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #003366 0%, #1a4d8c 100%);
+    }
+    
+    [data-testid="stSidebar"] * { color: white !important; }
+    
+    .sidebar-info {
+        background: rgba(255,255,255,0.12);
+        padding: 0.8rem;
+        border-radius: 12px;
+        margin-bottom: 1rem;
+    }
+    
+    .rounded-image {
+        border-radius: 50%;
+        overflow: hidden;
+        width: 100px;
+        height: 100px;
+        margin: 0 auto;
+        background: white;
+        padding: 5px;
+        border: 3px solid #4da8ff;
+    }
+    
+    .logo-enlaces {
+        text-align: center;
+        margin: 10px 0;
+        padding: 10px;
+        background: rgba(255,255,255,0.1);
+        border-radius: 12px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# FUNCIONES DE CARGA
+# ==========================================
+@st.cache_data
 def cargar_imagen(ruta_imagen):
     try:
         img_path = Path(ruta_imagen)
@@ -351,114 +394,55 @@ def cargar_imagen(ruta_imagen):
     except:
         return None
 
+@st.cache_data
+def cargar_documentos():
+    """Carga todos los problemas y soluciones de los TXT desde la RAÍZ"""
+    documentos = []
+    docs_dir = Path(".")  # ← Cambiado: ahora busca en la raíz
+    
+    for txt_file in docs_dir.glob("*.txt"):
+        try:
+            with open(txt_file, 'r', encoding='utf-8') as f:
+                contenido = f.read()
+            
+            patron = r'Problema:\s*(.+?)\s*Solución:\s*(.+?)(?=\n\s*Problema:|\Z)'
+            matches = re.findall(patron, contenido, re.IGNORECASE | re.DOTALL)
+            
+            for problema, solucion in matches:
+                documentos.append({
+                    'problema': problema.strip(),
+                    'solucion': solucion.strip(),
+                    'archivo': txt_file.name
+                })
+            
+            if "Direcciones de sedes" in contenido:
+                sedes_match = re.search(r'Direcciones de sedes por departamento:\s*\n(.*?)(?=\n\n|\nProblema|\Z)', contenido, re.DOTALL)
+                if sedes_match:
+                    sedes_texto = sedes_match.group(1).strip()
+                    documentos.append({
+                        'problema': 'direcciones de sedes',
+                        'solucion': sedes_texto,
+                        'archivo': txt_file.name
+                    })
+        except:
+            pass
+    
+    return documentos
+
+# ==========================================
+# INTERFAZ PRINCIPAL
+# ==========================================
 def main():
-    # Verificar autenticación
-    if "autenticado" not in st.session_state:
-        st.session_state.autenticado = False
-        st.session_state.user_email = ""
-
-    if not st.session_state.autenticado:
-        mostrar_login()
-        st.stop()
-
-    # CSS común del código 1
-    st.markdown("""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
-        * { font-family: 'Poppins', sans-serif; }
-                
-        .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #e8edf5 100%); }
-        
-        .main-header {
-            background: linear-gradient(135deg, #003366 0%, #1a4d8c 100%);
-            padding: 1rem 2rem;
-            border-radius: 15px;
-            color: white;
-            text-align: center;
-            margin-bottom: 1.5rem;
-        }
-        
-        .main-header h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
-        .main-header p { margin: 3px 0 0; font-size: 0.7rem; opacity: 0.9; }
-        
-        .chat-message-user {
-            background: linear-gradient(135deg, #003366, #1a4d8c);
-            color: white;
-            padding: 10px 16px;
-            border-radius: 18px 18px 5px 18px;
-            margin: 8px 0;
-            text-align: right;
-            max-width: 75%;
-            margin-left: auto;
-        }
-        
-        .chat-message-bot {
-            background: #f0f4f9;
-            color: #2c3e50;
-            padding: 10px 16px;
-            border-radius: 18px 18px 18px 5px;
-            margin: 8px 0;
-            text-align: left;
-            max-width: 85%;
-            margin-right: auto;
-            border-left: 3px solid #4da8ff;
-        }
-        
-        .footer {
-            background: white;
-            padding: 0.8rem;
-            border-radius: 12px;
-            margin-top: 1.5rem;
-            text-align: center;
-            color: #6c757d;
-            font-size: 0.7rem;
-        }
-        
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #003366 0%, #1a4d8c 100%);
-        }
-        
-        [data-testid="stSidebar"] * { color: white !important; }
-        
-        .sidebar-info {
-            background: rgba(255,255,255,0.12);
-            padding: 0.8rem;
-            border-radius: 12px;
-            margin-bottom: 1rem;
-        }
-        
-        .rounded-image {
-            border-radius: 50%;
-            overflow: hidden;
-            width: 100px;
-            height: 100px;
-            margin: 0 auto;
-            background: white;
-            padding: 5px;
-            border: 3px solid #4da8ff;
-        }
-        
-        .logo-enlaces {
-            text-align: center;
-            margin: 10px 0;
-            padding: 10px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 12px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
     img_escudo = cargar_imagen("mined.jpeg")
     img_enlaces = cargar_imagen("enlaces.png")
-
+    
     st.markdown("""
     <div class="main-header">
         <h1>🎓 Asistente ENLACES</h1>
         <p>Soporte para cuentas @clases.edu.sv y equipos técnicos</p>
     </div>
     """, unsafe_allow_html=True)
-
-    # Sidebar con información del usuario y documentos
+    
     with st.sidebar:
         if img_escudo:
             st.markdown(f"""
@@ -476,51 +460,13 @@ def main():
             </div>
             """, unsafe_allow_html=True)
         
-        st.markdown(f"**👤 Usuario:** {st.session_state.user_email}")
-        if st.button("🚪 Cerrar sesión"):
-            st.session_state.autenticado = False
-            st.session_state.user_email = ""
-            st.rerun()
-        
         st.markdown("---")
         st.markdown("### 📞 Contacto")
         st.markdown("📱 Teléfono: 2990-6000")
         st.markdown("💬 WhatsApp: 7070-9889")
         st.markdown("---")
-        
-        st.header("📁 Selección de documentos")
-        opcion = st.radio(
-            "¿Qué documento(s) quieres usar?",
-            ["📄 Solo cuentas_clases.txt", "📄 Solo soporte_equipos.txt", "📚 Ambos"]
-        )
-        if opcion == "📄 Solo cuentas_clases.txt":
-            archivos = ["cuentas_clases.txt"]
-            index_name = "index_cuentas"
-        elif opcion == "📄 Solo soporte_equipos.txt":
-            archivos = ["soporte_equipos.txt"]
-            index_name = "index_soporte"
-        else:
-            archivos = ["cuentas_clases.txt", "soporte_equipos.txt"]
-            index_name = "index_ambos"
-
-        INDEX_PATH = INDEX_BASE / index_name
-
-        if st.button("🔄 Construir / Reconstruir índice", type="primary"):
-            if construir_index(archivos, str(INDEX_PATH)):
-                st.session_state.vector_store = cargar_index(str(INDEX_PATH))
-                st.session_state.mensajes = []
-                st.rerun()
-
-        if st.button("🗑️ Limpiar índice"):
-            if os.path.exists(INDEX_PATH):
-                shutil.rmtree(INDEX_PATH)
-            st.session_state.vector_store = None
-            st.session_state.mensajes = []
-            st.success("Índice eliminado.")
-            st.rerun()
-        
-        st.markdown("---")
         st.markdown("### 💡 Ejemplos")
+        
         ejemplos = [
             "Hola, ¿cómo estás?",
             "Olvidé mi contraseña",
@@ -529,78 +475,48 @@ def main():
             "¿Cuál es el número de soporte?",
             "No sé mi NIE"
         ]
+        
         for ej in ejemplos:
             if st.button(ej, key=ej, use_container_width=True):
                 st.session_state["ejemplo"] = ej
-
-    # Cargar el índice si existe
-    if "vector_store" not in st.session_state:
-        st.session_state.vector_store = None
-        # Intentar cargar el último índice usado
-        if INDEX_PATH.exists():
-            st.session_state.vector_store = cargar_index(str(INDEX_PATH))
-    if "cross_encoder" not in st.session_state:
-        with st.spinner("Cargando modelo de re-ranking (solo la primera vez)..."):
-            st.session_state.cross_encoder = cargar_cross_encoder()
-
-    # Inicializar historial de mensajes
-    if "mensajes" not in st.session_state:
-        st.session_state.mensajes = []
-
-    # Procesar ejemplo si viene
+    
+    documentos = cargar_documentos()
+    
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    
     if "ejemplo" in st.session_state:
         prompt = st.session_state["ejemplo"]
-        st.session_state.mensajes.append({"role": "user", "content": prompt})
+        st.session_state.messages.append({"role": "user", "content": prompt})
         with st.spinner("🤖 Pensando..."):
-            # Primero verificar si pregunta por el creador
-            if es_pregunta_sobre_creador(prompt):
-                response = respuesta_sobre_creador()
-            else:
-                if st.session_state.vector_store is None:
-                    response = "⚠️ No hay índice. Construye el índice primero en la barra lateral."
-                else:
-                    contexto, fuentes = buscar_contexto(prompt, st.session_state.vector_store, st.session_state.cross_encoder)
-                    if contexto is None:
-                        response = "No encontré información relevante en los documentos. ¿Puedes reformular la pregunta?"
-                    else:
-                        response = responder_con_groq(prompt, contexto, st.session_state.mensajes[:-1])
-            st.session_state.mensajes.append({"role": "assistant", "content": response})
+            response = responder(prompt, st.session_state.messages[:-1], documentos)
+        st.session_state.messages.append({"role": "assistant", "content": response})
         del st.session_state["ejemplo"]
         st.rerun()
-
-    # Mostrar mensajes
-    for msg in st.session_state.mensajes:
+    
+    for msg in st.session_state.messages:
         if msg["role"] == "user":
             st.markdown(f'<div class="chat-message-user">👤 {msg["content"]}</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="chat-message-bot">🤖 {msg["content"]}</div>', unsafe_allow_html=True)
-
-    # Input del usuario
-    if prompt := st.chat_input("Escribe tu consulta aquí..."):
-        st.session_state.mensajes.append({"role": "user", "content": prompt})
-        with st.spinner("🤖 Pensando..."):
-            # Detectar pregunta sobre el creador
-            if es_pregunta_sobre_creador(prompt):
-                response = respuesta_sobre_creador()
-            else:
-                if st.session_state.vector_store is None:
-                    response = "⚠️ No hay índice. Construye el índice primero en la barra lateral."
-                else:
-                    contexto, fuentes = buscar_contexto(prompt, st.session_state.vector_store, st.session_state.cross_encoder)
-                    if contexto is None:
-                        response = "No encontré información relevante en los documentos. ¿Puedes reformular la pregunta?"
-                    else:
-                        response = responder_con_groq(prompt, contexto, st.session_state.mensajes[:-1])
-            st.session_state.mensajes.append({"role": "assistant", "content": response})
-        st.rerun()
-
-    # Botón para limpiar historial
+    
     col1, col2 = st.columns([5, 1])
+    
+    with col1:
+        prompt = st.chat_input("Escribe tu consulta aquí...")
+    
     with col2:
         if st.button("🗑️ Limpiar", key="clear_btn", use_container_width=True):
-            st.session_state.mensajes = []
+            st.session_state.messages = []
             st.rerun()
-
+    
+    if prompt:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.spinner("🤖 Pensando..."):
+            response = responder(prompt, st.session_state.messages[:-1], documentos)
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.rerun()
+    
     st.markdown("""
     <div class="footer">
         <strong>Ministerio de Educación, Ciencia y Tecnología de El Salvador</strong><br>
