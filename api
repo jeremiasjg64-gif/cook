@@ -1,528 +1,240 @@
 import streamlit as st
 import re
 from pathlib import Path
-import base64
 from groq import Groq
-import time
-from datetime import datetime, timedelta
+import pyrebase
 
 # ==========================================
-# CONFIGURACIÓN
+# CONFIG
 # ==========================================
-st.set_page_config(
-    page_title="ENLACES - Asistente Virtual",
-    page_icon="🎓",
-    layout="wide"
-)
+st.set_page_config(page_title="Atlas", page_icon="🎓", layout="wide")
 
-GROQ_API_KEY = "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"  # Tu API key
-cliente = Groq(api_key=GROQ_API_KEY)
+cliente = Groq(api_key="TU_API_KEY_AQUI")
 MODELO = "llama-3.1-8b-instant"
 
 # ==========================================
-# FUNCIÓN PARA DETECTAR PREGUNTAS SOBRE EL CREADOR
+# FIREBASE
 # ==========================================
-def es_pregunta_sobre_creador(pregunta: str) -> bool:
-    """Detecta si el usuario pregunta quién creó el asistente"""
-    pregunta_lower = pregunta.lower()
-    palabras_creador = [
-        'quién te creó', 'quien te creo', 'quién te hizo', 'quien te hizo',
-        'quién es tu creador', 'quien es tu creador', 'quién te programó',
-        'quien te programo', 'quién desarrolló', 'quien desarrollo',
-        'quién está detrás de ti', 'quien esta detras de ti',
-        'anthony', 'gabriel', 'hernandez', 'cartaegna', 'jutta steiner',
-        'complejo educativo', 'toruño'
-    ]
-    for palabra in palabras_creador:
-        if palabra in pregunta_lower:
-            return True
-    return False
+FIREBASE_CONFIG = {
+    "apiKey": "AIzaSyAkx-rjtOODGq90ylMRCjTS_2nqnelrEbQ",
+    "authDomain": "cook-a7ba8.firebaseapp.com",
+    "databaseURL": "https://cook-a7ba8-default-rtdb.firebaseio.com",
+    "projectId": "cook-a7ba8",
+    "storageBucket": "cook-a7ba8.firebasestorage.app",
+    "messagingSenderId": "573777071011",
+    "appId": "1:573777071011:web:a505d0373a25ae3f13a816"
+}
 
-def respuesta_sobre_creador() -> str:
-    """Respuesta cuando preguntan sobre el creador"""
-    return """😊 **¡Qué bonito que quieras conocerme!**
-
-Yo fui creado por **Anthony Gabriel Hernández Cartagena**, un estudiante talentoso del **Complejo Educativo Jutta Steiner de Toruño**.
-
-Anthony me diseñó y programó para ayudar a los estudiantes y docentes de ENLACES con sus consultas técnicas. Él quería que hubiera un asistente virtual amable, rápido y útil que pudiera responder preguntas sobre:
-
-✅ Recuperación de contraseñas de @clases.edu.sv
-✅ Problemas con laptops (encendido, batería, cargador)
-✅ Consulta de NIE
-✅ Ubicación de sedes (San Salvador, Santa Ana, San Miguel)
-✅ Números de contacto (2990-6000, 7070-9889)
-
-Así que aquí estoy, gracias a su esfuerzo y dedicación. ¡Espero estar a la altura de lo que él imaginó! 😊
-
-¿Necesitas ayuda con algo de ENLACES? ¡Cuéntame!"""
+firebase = pyrebase.initialize_app(FIREBASE_CONFIG)
+auth = firebase.auth()
 
 # ==========================================
-# FUNCIÓN RESPONDER SOLO CON TXT (RESPALDO)
-# ==========================================
-def responder_solo_txt(pregunta: str, documentos: list) -> str:
-    """Responde usando SOLO los TXT - modo de respaldo"""
-    
-    # Primero verificar si pregunta por el creador
-    if es_pregunta_sobre_creador(pregunta):
-        return respuesta_sobre_creador()
-    
-    if not documentos:
-        return "⚠️ No hay documentos en la carpeta 'documentos_enlaces'"
-    
-    pregunta_lower = pregunta.lower()
-    
-    # Saludos
-    if any(p in pregunta_lower for p in ['hola', 'buenos días', 'buenas tardes', 'buenas noches', 'hey', 'saludos']):
-        return "¡Hola! 😊 Soy el asistente de ENLACES. ¿En qué puedo ayudarte hoy? Puedo ayudarte con contraseñas, problemas de laptop, recuperación de NIE, sedes de atención y más. ¡Cuéntame!"
-    
-    if any(p in pregunta_lower for p in ['cómo estás', 'como estas', 'que tal', 'qué tal']):
-        return "¡Estoy muy bien! 😊 Gracias por preguntar. Listo para ayudarte con lo que necesites. ¿Tienes alguna consulta sobre tu cuenta, tu laptop o las sedes de ENLACES?"
-    
-    if any(p in pregunta_lower for p in ['gracias', 'thank you', 'te agradezco']):
-        return "¡De nada! 😊 Para eso estoy aquí. ¿Necesitas ayuda con algo más? Estoy para servirte."
-    
-    if any(p in pregunta_lower for p in ['adiós', 'chao', 'hasta luego', 'nos vemos', 'bye']):
-        return "¡Hasta luego! 😊 Que tengas un excelente día. Si necesitas algo más, aquí estoy. ¡Cuídate!"
-    
-    # SEDES
-    if 'sede' in pregunta_lower:
-        if 'san salvador' in pregunta_lower or 'providencia' in pregunta_lower:
-            return "📍 **Sede San Salvador**\n\nFinal 25 Av. Norte, Reparto La Providencia, San Salvador.\n\n📞 Teléfono: 2990-6000\n🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"
-        elif 'santa ana' in pregunta_lower:
-            return "📍 **Sede Santa Ana**\n\n8a Avenida Sur, entre 15a y 17a Calle Poniente, Santa Ana.\n\n📞 Teléfono: 2990-6000\n🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"
-        elif 'san miguel' in pregunta_lower:
-            return "📍 **Sede San Miguel**\n\n12a Avenida Norte, No. 605, Barrio La Cruz, San Miguel.\n\n📞 Teléfono: 2990-6000\n🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"
-        else:
-            return """📍 **Todas las Sedes ENLACES**
-
-• **San Salvador:** Final 25 Av. Norte, Reparto La Providencia
-• **Santa Ana:** 8a Avenida Sur, entre 15a y 17a Calle Poniente
-• **San Miguel:** 12a Avenida Norte, No. 605, Barrio La Cruz
-
-📞 Teléfono: 2990-6000"""
-    
-    # LAPTOP
-    if any(p in pregunta_lower for p in ['laptop', 'enciende', 'prende', 'pantalla', 'encendido', 'no prende', 'computadora']):
-        return """💻 **Problemas con tu laptop**
-
-1. Verifica que el cargador esté bien conectado a la corriente y a la laptop
-2. Busca una luz pequeña en el cargador que indique que está recibiendo energía
-3. Déjala conectada unos 10 minutos
-4. Presiona el botón de encendido por 30 segundos sin soltar
-
-Si el problema persiste, llama al 2990-6000 para agendar una revisión en la sede más cercana.
-
-📞 **Mesa de Ayuda:** 2990-6000 | WhatsApp: 7070-9889"""
-    
-    # CONTRASEÑA
-    if any(p in pregunta_lower for p in ['contraseña', 'password', 'olvidé', 'recuperar', 'restablecer']):
-        if 'docente' in pregunta_lower:
-            return """🔐 **Recuperación de contraseña para DOCENTES**
-
-Ingresa a: http://docentes.clases.edu.sv/restablecer
-
-📞 Mesa de Ayuda: 2990-6000
-✉️ formacion.docente@mined.gob.sv"""
-        else:
-            return """🔐 **Recuperación de contraseña para ESTUDIANTES**
-
-Ingresa a: http://restablecer.clases.edu.sv
-
-⚠️ Solo funciona si tienes matrícula activa.
-
-📞 ¿Problemas? Llama al 2990-6000"""
-    
-    # NIE
-    if 'nie' in pregunta_lower:
-        return """📄 **Consulta tu NIE**
-
-Ingresa a: http://consulta.mined.gob.sv/nie
-
-Necesitas tu nombre completo y fecha de nacimiento.
-
-📞 Si no aparece, llama al 2990-6000"""
-    
-    # SOPORTE
-    if any(p in pregunta_lower for p in ['soporte', 'numero', 'teléfono', 'telefono', 'whatsapp', 'contacto', 'ayuda', '2990', '7070']):
-        return """📞 **Mesa de Ayuda ENLACES**
-
-• Teléfono fijo: 2990-6000
-• WhatsApp: 7070-9889
-• Correo: soporte.enlaces@mined.gob.sv
-
-🕐 Horario: Lunes a Viernes, 8:00 AM - 4:00 PM"""
-    
-    # DOCENTE BLOQUEADA
-    if 'docente' in pregunta_lower and ('bloqueada' in pregunta_lower or 'cuenta' in pregunta_lower):
-        return """👨‍🏫 **Cuenta de docente bloqueada**
-
-Contacta a la Mesa de Ayuda al 2990-6000 o escribe a formacion.docente@mined.gob.sv
-
-Ellos verificarán tu identidad y reactivarán tu cuenta."""
-    
-    # BATERÍA
-    if any(p in pregunta_lower for p in ['batería', 'bateria', 'carga', 'cargador']):
-        return """🔋 **Problemas con la batería**
-
-1. Prueba con otro enchufe
-2. Verifica que el cargador esté en buen estado
-3. Si la batería está hinchada, no la uses y llévala a la sede
-
-📞 Mesa de Ayuda: 2990-6000"""
-    
-    # Búsqueda en documentos
-    mejor_match = None
-    mejor_puntuacion = 0
-    
-    for doc in documentos:
-        problema = doc['problema'].lower()
-        puntuacion = 0
-        for palabra in pregunta_lower.split():
-            if len(palabra) > 2 and palabra in problema:
-                puntuacion += 10
-        
-        if puntuacion > mejor_puntuacion:
-            mejor_puntuacion = puntuacion
-            mejor_match = doc
-    
-    if mejor_match and mejor_puntuacion >= 10:
-        respuesta = mejor_match['solucion']
-        respuesta = re.sub(r'\s+', ' ', respuesta)
-        return f"{respuesta}\n\n📞 Mesa de Ayuda: 2990-6000 | WhatsApp: 7070-9889"
-    
-    # NO ENCONTRÓ NADA
-    return """❌ No encontré información específica en mis documentos.
-
-📚 **Puedo ayudarte con:**
-• Contraseñas de @clases.edu.sv
-• Problemas con laptops (encendido, batería, cargador)
-• Recuperación de NIE
-• Cuentas de docentes
-• Sedes de atención (direcciones, horarios)
-• Números de contacto
-
-📞 **Mesa de Ayuda:** 2990-6000 | WhatsApp: 7070-9889"""
-
-# ==========================================
-# FUNCIÓN RESPONDER CON API (FLUIDA Y COMPLETA)
-# ==========================================
-def responder_con_api(pregunta: str, historial: list, documentos: list) -> str:
-    """Responde usando API - conversación fluida con todo lo de TXT"""
-    
-    # PRIMERO: Verificar si pregunta por el creador
-    if es_pregunta_sobre_creador(pregunta):
-        return respuesta_sobre_creador()
-    
-    if not documentos:
-        return responder_solo_txt(pregunta, documentos)
-    
-    # Construir contexto con documentos
-    contexto_docs = ""
-    for doc in documentos[:25]:
-        contexto_docs += f"Problema: {doc['problema']}\nSolución: {doc['solucion']}\n\n"
-    
-    # Construir historial
-    historial_texto = ""
-    if historial and len(historial) > 0:
-        historial_texto = "\n--- CONVERSACIÓN ANTERIOR ---\n"
-        for msg in historial[-8:]:
-            if msg["role"] == "user":
-                historial_texto += f"Usuario: {msg['content']}\n"
-            else:
-                historial_texto += f"Asistente: {msg['content']}\n"
-        historial_texto += "---\n"
-    
-    prompt = f"""Eres un asistente virtual amable, empático y conversacional del programa ENLACES del Ministerio de Educación de El Salvador.
-
-📌 **TEMAS QUE CUBRES (según tus documentos):**
-- Cuentas @clases.edu.sv (contraseñas, recuperación, restablecimiento)
-- Problemas técnicos de laptops (encendido, batería, cargador, pantalla)
-- Recuperación de NIE
-- Cuentas de docentes (bloqueo, activación)
-- Sedes de atención (San Salvador, Santa Ana, San Miguel) con direcciones exactas
-- Números de contacto (teléfono 2990-6000, WhatsApp 7070-9889)
-- Soporte técnico en general
-
-🎯 **REGLAS:**
-1. Usa SOLO la información del CONTEXTO OFICIAL abajo para datos técnicos
-2. Responde TODO lo relacionado con los temas arriba mencionados
-3. Si el usuario pregunta sobre algo que NO está en tus documentos, dilo amablemente
-4. Mantén una conversación natural, con empatía y usando emojis ocasionalmente 😊
-5. No te limites solo a @clases.edu.sv - los laptops, sedes, NIE también son parte de ti
-
-CONTEXTO OFICIAL (información real de ENLACES):
-{contexto_docs}
-
-{historial_texto}
-
-Usuario: {pregunta}
-
-Responde de forma natural, amable y usando el contexto oficial para información técnica. Puedes conversar fluidamente:"""
-    
-    try:
-        response = cliente.chat.completions.create(
-            model=MODELO,
-            messages=[
-                {"role": "system", "content": "Eres un asistente amable de ENLACES. Ayudas con cuentas @clases.edu.sv, laptops, sedes, NIE y soporte técnico. Hablas de forma natural y empática."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.8,
-            max_tokens=500
-        )
-        
-        return response.choices[0].message.content
-        
-    except Exception as e:
-        if "429" in str(e):
-            return responder_solo_txt(pregunta, documentos)
-        return responder_solo_txt(pregunta, documentos)
-
-# ==========================================
-# FUNCIÓN PRINCIPAL
-# ==========================================
-def responder(pregunta: str, historial: list, documentos: list) -> str:
-    """Elige entre API y TXT"""
-    
-    try:
-        return responder_con_api(pregunta, historial, documentos)
-    except Exception as e:
-        return responder_solo_txt(pregunta, documentos)
-
-# ==========================================
-# ESTILOS CSS
+# 🎨 ESTILO ENLACES
 # ==========================================
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
-    * { font-family: 'Poppins', sans-serif; }
-            
-    .stApp { background: linear-gradient(135deg, #f5f7fa 0%, #e8edf5 100%); }
-    
-    .main-header {
-        background: linear-gradient(135deg, #003366 0%, #1a4d8c 100%);
-        padding: 1rem 2rem;
-        border-radius: 15px;
-        color: white;
-        text-align: center;
-        margin-bottom: 1.5rem;
-    }
-    
-    .main-header h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
-    .main-header p { margin: 3px 0 0; font-size: 0.7rem; opacity: 0.9; }
-    
-    .chat-message-user {
-        background: linear-gradient(135deg, #003366, #1a4d8c);
-        color: white;
-        padding: 10px 16px;
-        border-radius: 18px 18px 5px 18px;
-        margin: 8px 0;
-        text-align: right;
-        max-width: 75%;
-        margin-left: auto;
-    }
-    
-    .chat-message-bot {
-        background: #f0f4f9;
-        color: #2c3e50;
-        padding: 10px 16px;
-        border-radius: 18px 18px 18px 5px;
-        margin: 8px 0;
-        text-align: left;
-        max-width: 85%;
-        margin-right: auto;
-        border-left: 3px solid #4da8ff;
-    }
-    
-    .footer {
-        background: white;
-        padding: 0.8rem;
-        border-radius: 12px;
-        margin-top: 1.5rem;
-        text-align: center;
-        color: #6c757d;
-        font-size: 0.7rem;
-    }
-    
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #003366 0%, #1a4d8c 100%);
-    }
-    
-    [data-testid="stSidebar"] * { color: white !important; }
-    
-    .sidebar-info {
-        background: rgba(255,255,255,0.12);
-        padding: 0.8rem;
-        border-radius: 12px;
-        margin-bottom: 1rem;
-    }
-    
-    .rounded-image {
-        border-radius: 50%;
-        overflow: hidden;
-        width: 100px;
-        height: 100px;
-        margin: 0 auto;
-        background: white;
-        padding: 5px;
-        border: 3px solid #4da8ff;
-    }
-    
-    .logo-enlaces {
-        text-align: center;
-        margin: 10px 0;
-        padding: 10px;
-        background: rgba(255,255,255,0.1);
-        border-radius: 12px;
-    }
+
+/* Fondo */
+.stApp {
+    background-color: #f0f2f7;
+}
+
+/* Header azul */
+.header {
+    background:#1238A5;
+    padding:40px 20px;
+    text-align:center;
+    color:white;
+    border-radius:0 0 20px 20px;
+}
+
+/* Tarjeta blanca */
+.card {
+    background: white;
+    padding: 30px;
+    border-radius: 20px;
+    max-width: 600px;
+    margin: -80px auto 20px auto;
+    border: 2px solid #1238A5;
+    box-shadow: 0px 10px 30px rgba(0,0,0,0.05);
+}
+
+/* Textos negros */
+label, p, h1, h2, h3, span {
+    color: black !important;
+}
+
+/* Inputs */
+.stTextInput input {
+    border-radius: 10px !important;
+    border: 1px solid #1238A5 !important;
+}
+
+/* Botones */
+.stButton button {
+    background-color: #1238A5;
+    color: white;
+    border-radius: 10px;
+}
+
+/* Chat */
+.chat-user {
+    background: #1238A5;
+    color: white;
+    padding: 10px;
+    border-radius: 15px;
+    margin: 5px;
+    text-align: right;
+}
+
+.chat-bot {
+    background: #eef2ff;
+    color: #1238A5;
+    padding: 10px;
+    border-radius: 15px;
+    margin: 5px;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# FUNCIONES DE CARGA
+# HEADER
 # ==========================================
-@st.cache_data
-def cargar_imagen(ruta_imagen):
-    try:
-        img_path = Path(ruta_imagen)
-        if img_path.exists():
-            with open(img_path, "rb") as f:
-                img_data = f.read()
-            img_base64 = base64.b64encode(img_data).decode()
-            extension = img_path.suffix[1:]
-            return f"data:image/{extension};base64,{img_base64}"
-        return None
-    except:
-        return None
+def mostrar_header():
+    st.markdown("""
+    <div class="header">
+        <h1 style="margin:0; font-size:50px;">enlaces</h1>
+        <p style="margin:0; font-size:20px;">con la educación</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-@st.cache_data
-def cargar_documentos():
-    """Carga todos los problemas y soluciones de los TXT desde la RAÍZ"""
-    documentos = []
-    docs_dir = Path(".")  # ← Cambiado: ahora busca en la raíz
-    
-    for txt_file in docs_dir.glob("*.txt"):
+# ==========================================
+# LOGIN
+# ==========================================
+def mostrar_login():
+    mostrar_header()
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    st.subheader("🔐 Acceso al sistema")
+
+    modo = st.radio("Acción:", ["Iniciar sesión", "Registrarse"])
+
+    email = st.text_input("Correo")
+    password = st.text_input("Contraseña", type="password")
+
+    if st.button("Entrar"):
         try:
-            with open(txt_file, 'r', encoding='utf-8') as f:
-                contenido = f.read()
-            
-            patron = r'Problema:\s*(.+?)\s*Solución:\s*(.+?)(?=\n\s*Problema:|\Z)'
-            matches = re.findall(patron, contenido, re.IGNORECASE | re.DOTALL)
-            
-            for problema, solucion in matches:
-                documentos.append({
-                    'problema': problema.strip(),
-                    'solucion': solucion.strip(),
-                    'archivo': txt_file.name
-                })
-            
-            if "Direcciones de sedes" in contenido:
-                sedes_match = re.search(r'Direcciones de sedes por departamento:\s*\n(.*?)(?=\n\n|\nProblema|\Z)', contenido, re.DOTALL)
-                if sedes_match:
-                    sedes_texto = sedes_match.group(1).strip()
-                    documentos.append({
-                        'problema': 'direcciones de sedes',
-                        'solucion': sedes_texto,
-                        'archivo': txt_file.name
-                    })
-        except:
-            pass
-    
-    return documentos
+            if modo == "Iniciar sesión":
+                auth.sign_in_with_email_and_password(email, password)
+                st.session_state.auth = True
+                st.rerun()
+            else:
+                auth.create_user_with_email_and_password(email, password)
+                st.success("Cuenta creada correctamente")
+        except Exception as e:
+            st.error(str(e))
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
-# INTERFAZ PRINCIPAL
+# DOCUMENTOS
+# ==========================================
+def cargar_documentos():
+    docs = []
+
+    archivos = [
+        Path("C:/bootcamp/documentos/soporte_equipos.txt"),
+        Path("C:/bootcamp/documentos/cuentas_clases.txt")
+    ]
+
+    for file in archivos:
+        if file.exists():
+            texto = file.read_text(encoding="utf-8")
+
+            bloques = re.findall(
+                r'Problema:\s*(.+?)\s*Solución:\s*(.+?)(?=\nProblema:|\Z)',
+                texto,
+                re.DOTALL
+            )
+
+            for p, s in bloques:
+                docs.append({"problema": p, "solucion": s})
+
+    return docs
+
+# ==========================================
+# IA
+# ==========================================
+def responder(pregunta, historial, docs):
+
+    contexto = ""
+    for d in docs:
+        if any(p in d["problema"].lower() for p in pregunta.lower().split()):
+            contexto += d["solucion"] + "\n"
+
+    prompt = f"""
+Contexto:
+{contexto}
+
+Usuario: {pregunta}
+"""
+
+    try:
+        res = cliente.chat.completions.create(
+            model=MODELO,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Habla natural, como persona. No copies texto literal."
+                },
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return res.choices[0].message.content
+    except Exception as e:
+        return f"Error IA: {e}"
+
+# ==========================================
+# APP
 # ==========================================
 def main():
-    img_escudo = cargar_imagen("mined.jpeg")
-    img_enlaces = cargar_imagen("enlaces.png")
-    
-    st.markdown("""
-    <div class="main-header">
-        <h1>🎓 Asistente ENLACES</h1>
-        <p>Soporte para cuentas @clases.edu.sv y equipos técnicos</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    with st.sidebar:
-        if img_escudo:
-            st.markdown(f"""
-            <div class="rounded-image">
-                <img src="{img_escudo}" alt="Escudo MINED">
-            </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown("🇸🇻")
-        
-        if img_enlaces:
-            st.markdown(f"""
-            <div class="logo-enlaces">
-                <img src="{img_enlaces}" alt="ENLACES">
-            </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.markdown("### 📞 Contacto")
-        st.markdown("📱 Teléfono: 2990-6000")
-        st.markdown("💬 WhatsApp: 7070-9889")
-        st.markdown("---")
-        st.markdown("### 💡 Ejemplos")
-        
-        ejemplos = [
-            "Hola, ¿cómo estás?",
-            "Olvidé mi contraseña",
-            "Mi laptop no enciende",
-            "¿Dónde está la sede de San Miguel?",
-            "¿Cuál es el número de soporte?",
-            "No sé mi NIE"
-        ]
-        
-        for ej in ejemplos:
-            if st.button(ej, key=ej, use_container_width=True):
-                st.session_state["ejemplo"] = ej
-    
-    documentos = cargar_documentos()
-    
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    
-    if "ejemplo" in st.session_state:
-        prompt = st.session_state["ejemplo"]
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.spinner("🤖 Pensando..."):
-            response = responder(prompt, st.session_state.messages[:-1], documentos)
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        del st.session_state["ejemplo"]
-        st.rerun()
-    
-    for msg in st.session_state.messages:
-        if msg["role"] == "user":
-            st.markdown(f'<div class="chat-message-user">👤 {msg["content"]}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown(f'<div class="chat-message-bot">🤖 {msg["content"]}</div>', unsafe_allow_html=True)
-    
-    col1, col2 = st.columns([5, 1])
-    
-    with col1:
-        prompt = st.chat_input("Escribe tu consulta aquí...")
-    
-    with col2:
-        if st.button("🗑️ Limpiar", key="clear_btn", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
-    
-    if prompt:
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.spinner("🤖 Pensando..."):
-            response = responder(prompt, st.session_state.messages[:-1], documentos)
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        st.rerun()
-    
-    st.markdown("""
-    <div class="footer">
-        <strong>Ministerio de Educación, Ciencia y Tecnología de El Salvador</strong><br>
-        Mesa de Ayuda: 2990-6000 · WhatsApp: 7070-9889
-    </div>
-    """, unsafe_allow_html=True)
 
+    if "auth" not in st.session_state:
+        st.session_state.auth = False
+
+    if not st.session_state.auth:
+        mostrar_login()
+        return
+
+    mostrar_header()
+
+    docs = cargar_documentos()
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = []
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+
+    for msg in st.session_state.chat:
+        if msg["role"] == "user":
+            st.markdown(f"<div class='chat-user'>{msg['content']}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='chat-bot'>{msg['content']}</div>", unsafe_allow_html=True)
+
+    prompt = st.chat_input("Escribe tu consulta...")
+
+    if prompt:
+        st.session_state.chat.append({"role": "user", "content": prompt})
+
+        respuesta = responder(prompt, st.session_state.chat, docs)
+
+        st.session_state.chat.append({"role": "assistant", "content": respuesta})
+        st.rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
 if __name__ == "__main__":
     main()
